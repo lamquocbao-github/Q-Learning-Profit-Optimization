@@ -1,0 +1,126 @@
+import numpy as np
+import pandas as pd
+import random
+
+# --- Step 1: Simulate customer-level data ---
+# np.random.seed(42)
+n_customers = 200
+customers = pd.DataFrame({
+    'customer_id': range(1, n_customers + 1),
+    'customer_spend': np.random.randint(100, 2000, n_customers),
+    'marketing_spend': np.random.randint(5, 50, n_customers),
+})
+
+# --- Step 2: Define state & actions ---
+def discretize_state(cust_spend, mkt_spend):
+    spend_level = 'verylow' if cust_spend < 200 else 'low' if cust_spend < 800 else 'med' if cust_spend < 1500 else 'high'
+    mkt_level = 'low' if mkt_spend < 10 else 'med' if mkt_spend < 30 else 'high'
+    return (spend_level, mkt_level)
+
+actions = ['increase', 'decrease', 'maintain']  # change in marketing spend
+
+# --- Step 3: Reward function ---
+def simulate_profit(cust_spend, mkt_spend):
+    # synthetic formula: profit = revenue - cost
+    # revenue = cust_spend * (1 + np.random.normal(0.05, 0.02))
+    revenue = cust_spend * (np.random.normal(0.01, 0.03))
+    cost = mkt_spend * 1.0
+    return revenue - cost
+
+# --- Step 4: Q-Learning setup ---
+alpha_lr = 0.15   # learning rate
+gamma = 0.9      # discount factor
+epsilon = 0.2    # exploration rate
+episodes = 8000
+
+upper_cs = 1.05
+lower_cs = 0.05
+
+Q = {}
+
+# Initialize Q-table for all states and actions
+states = [(s1, s2) for s1 in ['verylow', 'low', 'med', 'high'] for s2 in ['low', 'med', 'high']]
+for state in states:
+    for action in actions:
+        Q[(state, action)] = 0.0
+
+# --- Step 5: Training loop ---
+for _ in range(episodes):
+    for idx, row in customers.iterrows():
+        state = discretize_state(row['customer_spend'], row['marketing_spend'])
+
+        # Epsilon-greedy choice
+        if random.random() < epsilon:
+            action = random.choice(actions)
+        else:
+            action = max(actions, key=lambda a: Q[(state, a)])
+
+        # Simulate next state
+        new_mkt_spend = row['marketing_spend']
+        cust_spend_new = row['customer_spend']
+        if action == 'increase':
+            new_mkt_spend = new_mkt_spend*upper_cs
+            cust_spend_new = row['customer_spend'] * (1 + max(0,(np.random.normal(0.01, 0.05))))
+        elif action == 'decrease':
+            # new_mkt_spend = max(0, new_mkt_spend - 20)
+            new_mkt_spend = new_mkt_spend*lower_cs
+            cust_spend_new = row['customer_spend'] * (1 + min(0,(np.random.normal(-0.05, 0.01))))
+
+        reward = simulate_profit(cust_spend_new, new_mkt_spend)
+        next_state = discretize_state(cust_spend_new, new_mkt_spend)
+
+        # Choose best future action from next_state
+        best_next_action = max(actions, key=lambda a: Q[(next_state, a)])
+        
+        # Q-learning update
+        Q[(state, action)] += alpha_lr * (
+            reward + gamma * Q[(next_state, best_next_action)] - Q[(state, action)]
+        )
+        
+        # row['marketing_spend'] = new_mkt_spend
+        # row['customer_spend'] = cust_spend_new
+
+print('done q-learning table!')
+
+# --- Step 6: Apply learned policy ---
+policy_results = []
+for idx, row in customers.iterrows():
+    state = discretize_state(row['customer_spend'], row['marketing_spend'])
+    best_action = max(actions, key=lambda a: Q[(state, a)])
+
+    new_mkt_spend = row['marketing_spend']
+    cust_spend_new = row['customer_spend']
+    if best_action == 'increase':
+        new_mkt_spend = new_mkt_spend*upper_cs
+        cust_spend_new = row['customer_spend'] * (1 + max(0,(np.random.normal(0.01, 0.05))))
+    elif best_action == 'decrease':
+        # new_mkt_spend = max(0, new_mkt_spend - 50)
+        new_mkt_spend = new_mkt_spend*lower_cs
+        cust_spend_new = row['customer_spend'] * (1 + min(0,(np.random.normal(-0.05, 0.01))))
+        
+    curr_profit = simulate_profit(row['customer_spend'], row['marketing_spend'])
+    profit = simulate_profit(cust_spend_new, new_mkt_spend)
+
+    policy_results.append({
+        'customer_id': row['customer_id'],
+        'state': state,
+        'cur_spend': row['customer_spend'],
+        'cust_spend_new': cust_spend_new,
+        'cur_marketing': row['marketing_spend'],
+        'best_action': best_action,
+        'new_marketing_spend': new_mkt_spend,
+        'curr_profit': round(curr_profit, 2),
+        'profit': round(profit, 2)
+    })
+
+policy_df = pd.DataFrame(policy_results)
+
+# --- Step 7: Summary ---
+summary = policy_df[['profit','curr_profit','state','best_action','cur_marketing','new_marketing_spend',
+                     'cur_spend','cust_spend_new']].groupby(['state','best_action']).agg(['sum', 'mean','count']).sort_values(['state'])
+# .rename({'sum': 'total_profit', 'mean': 'avg_profit'})
+
+print("=== Customer Level Actions & Profits ===")
+print(policy_df)
+print("\n=== Total Population Summary ===")
+print(summary)
